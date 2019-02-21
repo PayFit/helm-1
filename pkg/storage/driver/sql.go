@@ -17,7 +17,16 @@ limitations under the License.
 package driver
 
 import (
+	"strconv"
+	"strings"
+
+	"github.com/jmoiron/sqlx"
+
+	// Import pq for potgres dialect
+	_ "github.com/lib/pq"
+
 	rspb "k8s.io/helm/pkg/proto/hapi/release"
+	storageerrors "k8s.io/helm/pkg/storage/errors"
 )
 
 var _ Driver = (*SQL)(nil)
@@ -26,38 +35,64 @@ var _ Driver = (*SQL)(nil)
 const SQLDriverName = "SQL"
 
 // SQL is the sql storage driver implementation.
-type SQL struct{}
+type SQL struct {
+	db *sqlx.DB
+}
+
+type Release struct {
+	ID      int
+	Name    string
+	Version int
+	Rls     rspb.Release
+}
+
+type Label struct {
+	ID   int
+	Name string
+}
+
+type ReleaseLabelAssociation struct {
+	ID        int
+	ReleaseID int
+	LabelID   int
+}
 
 // NewSQL initializes a new memory driver.
-func NewSQL() *SQL {
-	return &SQL{}
+func NewSQL(dialect, connectionString string) *SQL {
+	db, err := sqlx.Connect(dialect, connectionString)
+	if err != nil {
+		panic(err)
+	}
+	return &SQL{
+		db: db,
+	}
 }
 
 // Name returns the name of the driver.
 func (s *SQL) Name() string {
-	return ""
+	return SQLDriverName
 }
 
 // Get returns the release named by key or returns ErrReleaseNotFound.
 func (s *SQL) Get(key string) (*rspb.Release, error) {
-	// defer unlock(mem.rlock())
+	var elems []string
+	if elems = strings.Split(key, ".v"); len(elems) != 2 {
+		return nil, storageerrors.ErrInvalidKey(key)
+	}
 
-	// switch elems := strings.Split(key, ".v"); len(elems) {
-	// case 2:
-	// 	name, ver := elems[0], elems[1]
-	// 	if _, err := strconv.Atoi(ver); err != nil {
-	// 		return nil, storageerrors.ErrInvalidKey(key)
-	// 	}
-	// 	if recs, ok := mem.cache[name]; ok {
-	// 		if r := recs.Get(key); r != nil {
-	// 			return r.rls, nil
-	// 		}
-	// 	}
-	// 	return nil, storageerrors.ErrReleaseNotFound(key)
-	// default:
-	// 	return nil, storageerrors.ErrInvalidKey(key)
-	// }
-	return nil, nil
+	name, version := elems[0], elems[1]
+	if _, err := strconv.Atoi(version); err != nil {
+		return nil, storageerrors.ErrInvalidKey(key)
+	}
+
+	releases := []Release{}
+	s.db.Select(&releases, "SELECT * FROM releases WHERE name=$1 AND version=$2", name, version)
+
+	if len(releases) == 0 {
+		return nil, storageerrors.ErrReleaseNotFound(key)
+	}
+
+	return &releases[0].Rls, nil
 }
 
 // List returns the list of all releases such that filter(release) == true
