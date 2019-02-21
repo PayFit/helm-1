@@ -96,46 +96,56 @@ func (s *SQL) Get(key string) (*rspb.Release, error) {
 
 // List returns the list of all releases such that filter(release) == true
 func (s *SQL) List(filter func(*rspb.Release) bool) ([]*rspb.Release, error) {
-	// defer unlock(mem.rlock())
+	var records = []Release{}
+	if err := s.db.Select(&records, "SELECT * FROM releases"); err != nil {
+		return nil, err
+	}
 
-	// var ls []*rspb.Release
-	// for _, recs := range mem.cache {
-	// 	recs.Iter(func(_ int, rec *record) bool {
-	// 		if filter(rec.rls) {
-	// 			ls = append(ls, rec.rls)
-	// 		}
-	// 		return true
-	// 	})
-	// }
-	// return ls, nil
-	return nil, nil
+	var releases []*rspb.Release
+	for _, release := range records {
+		if filter(&release.Rls) {
+			releases = append(releases, &release.Rls)
+		}
+	}
+
+	return releases, nil
 }
 
 // Query returns the set of releases that match the provided set of labels
 func (s *SQL) Query(keyvals map[string]string) ([]*rspb.Release, error) {
-	// defer unlock(mem.rlock())
+	filters := ""
+	for _, key := range keyvals {
+		filters = strings.Join([]string{
+			filters,
+			"name=" + key + " AND value=" + keyvals[key],
+		}, " OR ")
+	}
 
-	// var lbs labels
+	query := strings.Join([]string{
+		"SELECT r.rls",
+		"FROM",
+		"release r",
+		"INNER JOIN",
+		"labels l ON r.id = l.release_id",
+		"WHERE",
+		filters,
+	}, " ")
 
-	// lbs.init()
-	// lbs.fromMap(keyvals)
+	rows, err := s.db.Query(query)
+	if err != nil {
+		return nil, err
+	}
 
-	// var ls []*rspb.Release
-	// for _, recs := range mem.cache {
-	// 	recs.Iter(func(_ int, rec *record) bool {
-	// 		// A query for a release name that doesn't exist (has been deleted)
-	// 		// can cause rec to be nil.
-	// 		if rec == nil {
-	// 			return false
-	// 		}
-	// 		if rec.lbs.match(lbs) {
-	// 			ls = append(ls, rec.rls)
-	// 		}
-	// 		return true
-	// 	})
-	// }
-	// return ls, nil
-	return nil, nil
+	var releases []*rspb.Release
+	for rows.Next() {
+		var rls rspb.Release
+		if err = rows.Scan(&rls); err != nil {
+			return nil, err
+		}
+		releases = append(releases, &rls)
+	}
+
+	return releases, nil
 }
 
 // Create creates a new release or returns ErrReleaseExists.
