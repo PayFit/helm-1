@@ -85,14 +85,12 @@ func (s *SQL) Get(key string) (*rspb.Release, error) {
 		return nil, storageerrors.ErrInvalidKey(key)
 	}
 
-	releases := []Release{}
-	s.db.Select(&releases, "SELECT * FROM releases WHERE name=$1 AND version=$2", name, version)
-
-	if len(releases) == 0 {
+	var release = Release{}
+	if err := s.db.Get(&release, "SELECT * FROM releases WHERE name=? AND version=?", name, version); err != nil {
 		return nil, storageerrors.ErrReleaseNotFound(key)
 	}
 
-	return &releases[0].Rls, nil
+	return &release.Rls, nil
 }
 
 // List returns the list of all releases such that filter(release) == true
