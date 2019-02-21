@@ -47,8 +47,9 @@ type Release struct {
 }
 
 type Label struct {
-	ID   int
-	Name string
+	ID    int
+	Name  string
+	Value string
 }
 
 type ReleaseLabelAssociation struct {
