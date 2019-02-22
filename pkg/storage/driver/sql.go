@@ -17,11 +17,9 @@ limitations under the License.
 package driver
 
 import (
-	"encoding/json"
-	"strconv"
 	"strings"
+	"time"
 
-	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 
 	// Import pq for potgres dialect
@@ -33,6 +31,15 @@ import (
 
 var _ Driver = (*SQL)(nil)
 
+var labelMap = map[string]string{
+	"MODIFIED_AT": "modified_at",
+	"CREATED_AT":  "created_at",
+	"VERSION":     "version",
+	"STATUS":      "status",
+	"OWNER":       "owner",
+	"NAME":        "name",
+}
+
 // SQLDriverName is the string name of this driver.
 const SQLDriverName = "SQL"
 
@@ -41,19 +48,44 @@ type SQL struct {
 	db *sqlx.DB
 }
 
-// Release describes a Helm release
-type Release struct {
-	UUID    uuid.UUID `db:"uuid"`
-	Name    string    `db:"name"`
-	Version int       `db:"version"`
-	Body    []byte    `db:"body"`
+// Name returns the name of the driver.
+func (s *SQL) Name() string {
+	return SQLDriverName
 }
 
-// Label describes KV pair associated with a given helm release, used for filtering only
-type Label struct {
-	ReleaseUUID uuid.UUID `db:"release_uuid"`
-	Key         string    `db:"key"`
-	Value       string    `db:"value"`
+func (s *SQL) ensureDBSetup() error {
+	// Populate the database with the relations we need if they don't exist yet
+	// TODO: use dbMigrate or something like that
+	// TODO: create smart indices (labels and key and... ?)
+	_, err := s.db.Exec(
+		`
+      CREATE TABLE IF NOT EXISTS releases (
+				key VARCHAR(67) PRIMARY KEY,
+        body STRING NOT NULL,
+
+        name VARCHAR(64) NOT NULL,
+        version INTEGER NOT NULL,
+				status STRING NOT NULL,
+				owner STRING NOT NULL,
+				created_at INTEGER NOT NULL,
+				modified_at INTEGER NOT NULL DEFAULT 0,
+      );
+		`,
+	)
+	return err
+}
+
+// Release describes a Helm release
+type Release struct {
+	Key  string `db:"key"`
+	Body string `db:"body"`
+
+	Name       string `db:"name"`
+	Version    int    `db:"version"`
+	Status     string `db:"status"`
+	Owner      string `db:"owner"`
+	CreatedAt  int    `db:"created_at"`
+	ModifiedAt int    `db:"modified_at"`
 }
 
 // NewSQL initializes a new memory driver.
@@ -62,57 +94,49 @@ func NewSQL(dialect, connectionString string) (*SQL, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &SQL{
-		db: db,
-	}, nil
-}
 
-// Name returns the name of the driver.
-func (s *SQL) Name() string {
-	return SQLDriverName
+	driver := &SQL{
+		db: db,
+	}
+
+	if err := driver.ensureDBSetup(); err != nil {
+		return nil, err
+	}
+
+	return driver, nil
 }
 
 // Get returns the release named by key.
 func (s *SQL) Get(key string) (*rspb.Release, error) {
-	var elems []string
-	if elems = strings.Split(key, ".v"); len(elems) != 2 {
-		return nil, storageerrors.ErrInvalidKey(key)
-	}
-
-	name, version := elems[0], elems[1]
-	if _, err := strconv.Atoi(version); err != nil {
-		return nil, storageerrors.ErrInvalidKey(key)
-	}
-
 	// Get will return an error if the result is empty
 	var record = &Release{}
-	if err := s.db.Get(record, "SELECT body FROM releases WHERE name=? AND version=?", name, version); err != nil {
+	if err := s.db.Get(record, "SELECT body FROM releases WHERE key=?", key); err != nil {
 		return nil, storageerrors.ErrReleaseNotFound(key)
 	}
 
-	var release rspb.Release
-	if err := json.Unmarshal(record.Body, &release); err != nil {
+	release, err := decodeRelease(record.Body)
+	if err != nil {
 		return nil, err
 	}
 
-	return &release, nil
+	return release, nil
 }
 
 // List returns the list of all releases such that filter(release) == true
 func (s *SQL) List(filter func(*rspb.Release) bool) ([]*rspb.Release, error) {
 	var records = []Release{}
-	if err := s.db.Select(&records, "SELECT * FROM releases"); err != nil {
+	if err := s.db.Select(&records, "SELECT body FROM releases WHERE owner='TILLER'"); err != nil {
 		return nil, err
 	}
 
 	var releases []*rspb.Release
 	for _, record := range records {
-		var release rspb.Release
-		if err := json.Unmarshal(record.Body, &release); err != nil {
-			return nil, err
+		release, err := decodeRelease(record.Body)
+		if err != nil {
+			continue
 		}
-		if filter(&release) {
-			releases = append(releases, &release)
+		if filter(release) {
+			releases = append(releases, release)
 		}
 	}
 
@@ -120,23 +144,21 @@ func (s *SQL) List(filter func(*rspb.Release) bool) ([]*rspb.Release, error) {
 }
 
 // Query returns the set of releases that match the provided set of labels.
-func (s *SQL) Query(keyvals map[string]string) ([]*rspb.Release, error) {
-	filters := ""
-	for _, key := range keyvals {
-		filters = strings.Join([]string{
-			filters,
-			"name=" + key + " AND value=" + keyvals[key],
-		}, " OR ")
+func (s *SQL) Query(labels map[string]string) ([]*rspb.Release, error) {
+	var filters []string
+	for key, val := range labels {
+		if dbField, ok := labelMap[key]; ok {
+			// TODO: escape that better
+			filters = append(filters, strings.Join([]string{
+				dbField, "='", val, "'",
+			}, ""))
+		}
 	}
 
 	query := strings.Join([]string{
-		"SELECT r.rls",
-		"FROM",
-		"releases r",
-		"INNER JOIN",
-		"labels l ON r.id = l.release_id",
+		"SELECT body FROM releases",
 		"WHERE",
-		filters,
+		strings.Join(filters, " AND "),
 	}, " ")
 
 	rows, err := s.db.Query(query)
@@ -146,11 +168,20 @@ func (s *SQL) Query(keyvals map[string]string) ([]*rspb.Release, error) {
 
 	var releases []*rspb.Release
 	for rows.Next() {
-		var release rspb.Release
-		if err = rows.Scan(&release); err != nil {
+		var record Release
+		if err = rows.Scan(&record); err != nil {
 			return nil, err
 		}
-		releases = append(releases, &release)
+
+		release, err := decodeRelease(record.Body)
+		if err != nil {
+			continue
+		}
+		releases = append(releases, release)
+	}
+
+	if len(releases) == 0 {
+		return nil, storageerrors.ErrReleaseNotFound(labels["NAME"])
 	}
 
 	return releases, nil
@@ -158,35 +189,32 @@ func (s *SQL) Query(keyvals map[string]string) ([]*rspb.Release, error) {
 
 // Create creates a new release.
 func (s *SQL) Create(key string, rls *rspb.Release) error {
-	var elems []string
-	if elems = strings.Split(key, ".v"); len(elems) != 2 {
-		return storageerrors.ErrInvalidKey(key)
-	}
-
-	data, err := json.Marshal(rls)
+	body, err := encodeRelease(rls)
 	if err != nil {
 		return err
 	}
 
-	version, err := strconv.Atoi(elems[1])
-	if err != nil {
-		return storageerrors.ErrInvalidKey(key)
-	}
+	if _, err := s.db.NamedExec(
+		`
+		  INSERT INTO releases (key, body, name, version, status, owner, created_at)
+			VALUES (:key, :body, :name, :version, :status, :owner, :created_at)
+		`,
+		&Release{
+			Key:  key,
+			Body: body,
 
-	tx := s.db.MustBegin()
+			Name:      rls.Name,
+			Version:   int(rls.Version),
+			Status:    rspb.Status_Code_name[int32(rls.Info.Status.Code)],
+			Owner:     "TILLER",
+			CreatedAt: int(time.Now().Unix()),
+		},
+	); err != nil {
+		var record Release
+		if err := s.db.Get(&record, "SELECT key FROM releases WHERE key=?", key); err == nil {
+			return storageerrors.ErrReleaseExists(key)
+		}
 
-	var record Release
-	if err := tx.Get(&record, "SELECT (*) FROM releases WHERE name=? AND version=?", elems[0], version); err == nil {
-		return storageerrors.ErrReleaseExists(key)
-	}
-
-	tx.NamedExec("INSERT INTO releases (uuid, name, version, body) VALUES (:uuid, :name, :version, :body)", &Release{
-		UUID:    uuid.New(),
-		Name:    elems[0],
-		Version: version,
-		Body:    data,
-	})
-	if err := tx.Commit(); err != nil {
 		return err
 	}
 
@@ -195,28 +223,27 @@ func (s *SQL) Create(key string, rls *rspb.Release) error {
 
 // Update updates a release.
 func (s *SQL) Update(key string, rls *rspb.Release) error {
-	var elems []string
-	if elems = strings.Split(key, ".v"); len(elems) != 2 {
-		return storageerrors.ErrInvalidKey(key)
-	}
-
-	version, err := strconv.Atoi(elems[1])
+	body, err := encodeRelease(rls)
 	if err != nil {
-		return storageerrors.ErrInvalidKey(key)
-	}
-
-	tx := s.db.MustBegin()
-
-	var record Release
-	if err := tx.Get(&record, "COUNT (*) FROM releases WHERE name=? AND version=?", elems[0], version); err != nil {
-		return storageerrors.ErrReleaseNotFound(key)
-	}
-
-	if _, err := tx.NamedExec("UPDATE releases SET body = ? WHERE uuid = ?", record.UUID); err != nil {
 		return err
 	}
 
-	if err := tx.Commit(); err != nil {
+	if _, err := s.db.NamedExec(
+		`
+			UPDATE releases WHERE key=:key
+			SET body=:body, name=:name, version=:version, status=:status, owner=:owner, modified_at=:modified_at
+		`,
+		&Release{
+			Key:  key,
+			Body: body,
+
+			Name:       rls.Name,
+			Version:    int(rls.Version),
+			Status:     rspb.Status_Code_name[int32(rls.Info.Status.Code)],
+			Owner:      "TILLER",
+			ModifiedAt: int(time.Now().Unix()),
+		},
+	); err != nil {
 		return err
 	}
 
@@ -225,19 +252,6 @@ func (s *SQL) Update(key string, rls *rspb.Release) error {
 
 // Delete deletes a release or returns ErrReleaseNotFound.
 func (s *SQL) Delete(key string) (*rspb.Release, error) {
-	var elems []string
-	if elems = strings.Split(key, ".v"); len(elems) != 2 {
-		return nil, storageerrors.ErrInvalidKey(key)
-	}
-
-	version, err := strconv.Atoi(elems[1])
-	if err != nil {
-		return nil, storageerrors.ErrInvalidKey(key)
-	}
-
-	if _, err := s.db.Exec("DELETE FROM releases WHERE name = ? AND version = ?", elems[0], version); err != nil {
-		return nil, err
-	}
-
-	return nil, nil
+	_, err := s.db.Exec("DELETE FROM releases WHERE key=?", key)
+	return nil, err
 }

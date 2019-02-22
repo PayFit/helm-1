@@ -1,5 +1,5 @@
 hash: ff01f870e21c847b33a25d0bb67b72a2cab492caa46fb65be6f89e4364069cf3
-updated: 2019-02-21T14:41:08.815341+01:00
+updated: 2019-02-22T14:40:08.691183671+01:00
 imports:
 - name: cloud.google.com/go
   version: 3b1ae45394a234c385be014e9a488f2bb6eef821
@@ -171,8 +171,14 @@ imports:
   version: 76626ae9c91c4f2a10f34cad8ce83ea42c93bb75
 - name: github.com/jmoiron/sqlx
   version: d161d7a76b5661016ad0b085869f77fd410f3e6a
+  subpackages:
+  - reflectx
 - name: github.com/json-iterator/go
   version: ab8a2e0c74be9d3be70b3184d9acc634935ded82
+- name: github.com/lib/pq
+  version: 88edab0803230a3898347e77b474f8c1820a1f20
+  subpackages:
+  - oid
 - name: github.com/mailru/easyjson
   version: 2f5df55504ebc322e4d52d34df6a1f5b503bf26d
   subpackages:
@@ -613,7 +619,7 @@ imports:
   - pkg/util/proto/testing
   - pkg/util/proto/validation
 - name: k8s.io/kubernetes
-  version: 4ef32ffb4e7c35985120a45702c5453c1bb6f6d2
+  version: 7e0181c6fe6e4fc4789b4f25e1b0c60b2ae5c264
   subpackages:
   - pkg/api/legacyscheme
   - pkg/api/service
