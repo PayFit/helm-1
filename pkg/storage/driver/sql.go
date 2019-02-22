@@ -17,6 +17,7 @@ limitations under the License.
 package driver
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 
@@ -71,7 +72,7 @@ func (s *SQL) Name() string {
 	return SQLDriverName
 }
 
-// Get returns the release named by key or returns ErrReleaseNotFound.
+// Get returns the release named by key.
 func (s *SQL) Get(key string) (*rspb.Release, error) {
 	var elems []string
 	if elems = strings.Split(key, ".v"); len(elems) != 2 {
@@ -83,15 +84,18 @@ func (s *SQL) Get(key string) (*rspb.Release, error) {
 		return nil, storageerrors.ErrInvalidKey(key)
 	}
 
-	var release = Release{}
-	if err := s.db.Get(&release, "SELECT body FROM releases WHERE name=? AND version=?", name, version); err != nil {
+	// Get will return an error if the result is empty
+	var record = &Release{}
+	if err := s.db.Get(record, "SELECT body FROM releases WHERE name=? AND version=?", name, version); err != nil {
 		return nil, storageerrors.ErrReleaseNotFound(key)
 	}
-	// TODO handle not found
 
-	// TODO unmarshal body
+	var release rspb.Release
+	if err := json.Unmarshal(record.Body, &release); err != nil {
+		return nil, err
+	}
 
-	return &release.Rls, nil
+	return &release, nil
 }
 
 // List returns the list of all releases such that filter(release) == true
@@ -102,16 +106,20 @@ func (s *SQL) List(filter func(*rspb.Release) bool) ([]*rspb.Release, error) {
 	}
 
 	var releases []*rspb.Release
-	for _, release := range records {
-		if filter(&release.Rls) {
-			releases = append(releases, &release.Rls)
+	for _, record := range records {
+		var release rspb.Release
+		if err := json.Unmarshal(record.Body, &release); err != nil {
+			return nil, err
+		}
+		if filter(&release) {
+			releases = append(releases, &release)
 		}
 	}
 
 	return releases, nil
 }
 
-// Query returns the set of releases that match the provided set of labels
+// Query returns the set of releases that match the provided set of labels.
 func (s *SQL) Query(keyvals map[string]string) ([]*rspb.Release, error) {
 	filters := ""
 	for _, key := range keyvals {
@@ -124,7 +132,7 @@ func (s *SQL) Query(keyvals map[string]string) ([]*rspb.Release, error) {
 	query := strings.Join([]string{
 		"SELECT r.rls",
 		"FROM",
-		"release r",
+		"releases r",
 		"INNER JOIN",
 		"labels l ON r.id = l.release_id",
 		"WHERE",
@@ -138,41 +146,80 @@ func (s *SQL) Query(keyvals map[string]string) ([]*rspb.Release, error) {
 
 	var releases []*rspb.Release
 	for rows.Next() {
-		var rls rspb.Release
-		if err = rows.Scan(&rls); err != nil {
+		var release rspb.Release
+		if err = rows.Scan(&release); err != nil {
 			return nil, err
 		}
-		releases = append(releases, &rls)
+		releases = append(releases, &release)
 	}
 
 	return releases, nil
 }
 
-// Create creates a new release or returns ErrReleaseExists.
+// Create creates a new release.
 func (s *SQL) Create(key string, rls *rspb.Release) error {
-	// defer unlock(mem.wlock())
+	var elems []string
+	if elems = strings.Split(key, ".v"); len(elems) != 2 {
+		return storageerrors.ErrInvalidKey(key)
+	}
 
-	// if recs, ok := mem.cache[rls.Name]; ok {
-	// 	if err := recs.Add(newRecord(key, rls)); err != nil {
-	// 		return err
-	// 	}
-	// 	mem.cache[rls.Name] = recs
-	// 	return nil
-	// }
-	// mem.cache[rls.Name] = records{newRecord(key, rls)}
-	// return nil
+	data, err := json.Marshal(rls)
+	if err != nil {
+		return err
+	}
+
+	version, err := strconv.Atoi(elems[1])
+	if err != nil {
+		return err
+	}
+
+	tx := s.db.MustBegin()
+
+	var record Release
+	if err := tx.Get(&record, "SELECT (*) FROM releases WHERE name=? AND version=?", elems[0], version); err == nil {
+		return storageerrors.ErrReleaseExists(key)
+	}
+
+	tx.NamedExec("INSERT INTO releases (uuid, name, version, body) VALUES (:uuid, :name, :version, :body)", &Release{
+		UUID:    uuid.New(),
+		Name:    elems[0],
+		Version: version,
+		Body:    data,
+	})
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
 	return nil
 }
 
-// Update updates a release or returns ErrReleaseNotFound.
+// Update updates a release.
 func (s *SQL) Update(key string, rls *rspb.Release) error {
-	// defer unlock(mem.wlock())
+	var elems []string
+	if elems = strings.Split(key, ".v"); len(elems) != 2 {
+		return storageerrors.ErrInvalidKey(key)
+	}
 
-	// if rs, ok := mem.cache[rls.Name]; ok && rs.Exists(key) {
-	// 	rs.Replace(key, newRecord(key, rls))
-	// 	return nil
-	// }
-	// return storageerrors.ErrReleaseNotFound(rls.Name)
+	version, err := strconv.Atoi(elems[1])
+	if err != nil {
+		return err
+	}
+
+	tx := s.db.MustBegin()
+
+	var record Release
+	if err := tx.Get(&record, "SELECT (*) FROM releases WHERE name=? AND version=?", elems[0], version); err != nil {
+		return storageerrors.ErrReleaseNotFound(key)
+	}
+
+	if _, err := tx.NamedExec("UPDATE releases SET body = ? WHERE uuid = ?", record.UUID); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
 	return nil
 }
 
