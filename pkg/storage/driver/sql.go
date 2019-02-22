@@ -170,7 +170,7 @@ func (s *SQL) Create(key string, rls *rspb.Release) error {
 
 	version, err := strconv.Atoi(elems[1])
 	if err != nil {
-		return err
+		return storageerrors.ErrInvalidKey(key)
 	}
 
 	tx := s.db.MustBegin()
@@ -202,13 +202,13 @@ func (s *SQL) Update(key string, rls *rspb.Release) error {
 
 	version, err := strconv.Atoi(elems[1])
 	if err != nil {
-		return err
+		return storageerrors.ErrInvalidKey(key)
 	}
 
 	tx := s.db.MustBegin()
 
 	var record Release
-	if err := tx.Get(&record, "SELECT (*) FROM releases WHERE name=? AND version=?", elems[0], version); err != nil {
+	if err := tx.Get(&record, "COUNT (*) FROM releases WHERE name=? AND version=?", elems[0], version); err != nil {
 		return storageerrors.ErrReleaseNotFound(key)
 	}
 
@@ -225,25 +225,19 @@ func (s *SQL) Update(key string, rls *rspb.Release) error {
 
 // Delete deletes a release or returns ErrReleaseNotFound.
 func (s *SQL) Delete(key string) (*rspb.Release, error) {
-	// defer unlock(mem.wlock())
+	var elems []string
+	if elems = strings.Split(key, ".v"); len(elems) != 2 {
+		return nil, storageerrors.ErrInvalidKey(key)
+	}
 
-	// elems := strings.Split(key, ".v")
+	version, err := strconv.Atoi(elems[1])
+	if err != nil {
+		return nil, storageerrors.ErrInvalidKey(key)
+	}
 
-	// if len(elems) != 2 {
-	// 	return nil, storageerrors.ErrInvalidKey(key)
-	// }
+	if _, err := s.db.Exec("DELETE FROM releases WHERE name = ? AND version = ?", elems[0], version); err != nil {
+		return nil, err
+	}
 
-	// name, ver := elems[0], elems[1]
-	// if _, err := strconv.Atoi(ver); err != nil {
-	// 	return nil, storageerrors.ErrInvalidKey(key)
-	// }
-	// if recs, ok := mem.cache[name]; ok {
-	// 	if r := recs.Remove(key); r != nil {
-	// 		// recs.Remove changes the slice reference, so we have to re-assign it.
-	// 		mem.cache[name] = recs
-	// 		return r.rls, nil
-	// 	}
-	// }
-	// return nil, storageerrors.ErrReleaseNotFound(key)
 	return nil, nil
 }
