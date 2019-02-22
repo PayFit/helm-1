@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 
 	// Import pq for potgres dialect
@@ -39,34 +40,30 @@ type SQL struct {
 	db *sqlx.DB
 }
 
+// Release describes a Helm release
 type Release struct {
-	ID      int
-	Name    string
-	Version int
-	Rls     rspb.Release
+	UUID    uuid.UUID `db:"uuid"`
+	Name    string    `db:"name"`
+	Version int       `db:"version"`
+	Body    []byte    `db:"body"`
 }
 
+// Label describes KV pair associated with a given helm release, used for filtering only
 type Label struct {
-	ID    int
-	Name  string
-	Value string
-}
-
-type ReleaseLabelAssociation struct {
-	ID        int
-	ReleaseID int
-	LabelID   int
+	ReleaseUUID uuid.UUID `db:"release_uuid"`
+	Key         string    `db:"key"`
+	Value       string    `db:"value"`
 }
 
 // NewSQL initializes a new memory driver.
-func NewSQL(dialect, connectionString string) *SQL {
+func NewSQL(dialect, connectionString string) (*SQL, error) {
 	db, err := sqlx.Connect(dialect, connectionString)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	return &SQL{
 		db: db,
-	}
+	}, nil
 }
 
 // Name returns the name of the driver.
@@ -87,9 +84,12 @@ func (s *SQL) Get(key string) (*rspb.Release, error) {
 	}
 
 	var release = Release{}
-	if err := s.db.Get(&release, "SELECT * FROM releases WHERE name=? AND version=?", name, version); err != nil {
+	if err := s.db.Get(&release, "SELECT body FROM releases WHERE name=? AND version=?", name, version); err != nil {
 		return nil, storageerrors.ErrReleaseNotFound(key)
 	}
+	// TODO handle not found
+
+	// TODO unmarshal body
 
 	return &release.Rls, nil
 }
