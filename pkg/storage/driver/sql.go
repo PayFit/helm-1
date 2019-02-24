@@ -83,7 +83,7 @@ func (s *SQL) ensureDBSetup() error {
             CREATE INDEX ON releases (modified_at);
 		      `,
 				},
-				Down: {
+				Down: []string{
 					`
             DROP TABLE releases;
           `,
@@ -92,7 +92,7 @@ func (s *SQL) ensureDBSetup() error {
 		},
 	}
 
-	_, err := migrate.Exec(s.db, "postgres", migrations, migrate.Up)
+	_, err := migrate.Exec(s.db.DB, "postgres", migrations, migrate.Up)
 	return err
 }
 
