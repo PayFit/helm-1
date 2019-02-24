@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/jmoiron/sqlx"
+	"github.com/rubenv/sql-migrate"
 
 	// Import pq for potgres dialect
 	_ "github.com/lib/pq"
@@ -55,23 +56,43 @@ func (s *SQL) Name() string {
 
 func (s *SQL) ensureDBSetup() error {
 	// Populate the database with the relations we need if they don't exist yet
-	// TODO: use dbMigrate or something like that
 	// TODO: create smart indices (labels and key and... ?)
-	_, err := s.db.Exec(
-		`
-      CREATE TABLE IF NOT EXISTS releases (
-				key VARCHAR(67) PRIMARY KEY,
-        body STRING NOT NULL,
+	migrations := &migrate.MemoryMigrationSource{
+		Migrations: []*migrate.Migration{
+			&migrate.Migration{
+				Id: "init",
+				Up: []string{
+					`
+            CREATE TABLE releases (
+		      		key VARCHAR(67) PRIMARY KEY,
+              body STRING NOT NULL,
 
-        name VARCHAR(64) NOT NULL,
-        version INTEGER NOT NULL,
-				status STRING NOT NULL,
-				owner STRING NOT NULL,
-				created_at INTEGER NOT NULL,
-				modified_at INTEGER NOT NULL DEFAULT 0,
-      );
-		`,
-	)
+              name VARCHAR(64) NOT NULL,
+              version INTEGER NOT NULL,
+		      		status STRING NOT NULL,
+		      		owner STRING NOT NULL,
+		      		created_at INTEGER NOT NULL,
+		      		modified_at INTEGER NOT NULL DEFAULT 0,
+            );
+
+            CREATE INDEX ON releases (key);
+            CREATE INDEX ON releases (version);
+            CREATE INDEX ON releases (status);
+            CREATE INDEX ON releases (owner);
+            CREATE INDEX ON releases (created_at);
+            CREATE INDEX ON releases (modified_at);
+		      `,
+				},
+				Down: {
+					`
+            DROP TABLE releases;
+          `,
+				},
+			},
+		},
+	}
+
+	_, err := migrate.Exec(s.db, "postgres", migrations, migrate.Up)
 	return err
 }
 
