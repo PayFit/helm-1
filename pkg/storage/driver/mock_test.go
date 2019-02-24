@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"testing"
 
+	sqlmock "github.com/DATA-DOG/go-sqlmock"
+	"github.com/jmoiron/sqlx"
 	"k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -220,4 +222,34 @@ func (mock *MockSecretsInterface) Delete(name string, opts *metav1.DeleteOptions
 	}
 	delete(mock.objects, name)
 	return nil
+}
+
+// newTestFixtureSQL mocks the SQL database (for testing purposes)
+func newTestFixtureSQL(t *testing.T, releases ...*rspb.Release) (*SQL, sqlmock.Sqlmock) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("error when opening stub database connection: %v", err)
+	}
+
+	// for _, release := range releases {
+	// 	// relKey := testKey(release.Name, release.Version)
+
+	// 	encodedRelease, err := encodeRelease(release)
+	// 	if err != nil {
+	// 		t.Fatalf("impossible to encode mocked release: %v", err)
+	// 	}
+
+	// 	mock.
+	// 		ExpectQuery(
+	// 			"SELECT body FROM releases",
+	// 		).
+	// 		// WithArgs(relKey).
+	// 		WillReturnRows(mock.NewRows([]string{encodedRelease}))
+
+	// }
+
+	sqlxDB := sqlx.NewDb(sqlDB, "sqlmock")
+	return &SQL{
+		db: sqlxDB,
+	}, mock
 }

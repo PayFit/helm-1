@@ -1,5 +1,5 @@
-hash: 7b504720c47308ba7ccd6c2d17d6358b465adef0fd795a257fc6ea1f041e05a2
-updated: 2019-02-24T12:19:09.977172477+01:00
+hash: 722d24ca4a1ccd4851ee235721abc1232319095481f77a4bea857bff3927ecb1
+updated: 2019-02-26T23:46:44.063096229+01:00
 imports:
 - name: cloud.google.com/go
   version: 3b1ae45394a234c385be014e9a488f2bb6eef821
@@ -40,6 +40,8 @@ imports:
   - md2man
 - name: github.com/cyphar/filepath-securejoin
   version: a261ee33d7a517f054effbf451841abaafe3e0fd
+- name: github.com/DATA-DOG/go-sqlmock
+  version: 472e287dbafe67e526a3797165b64cb14f34705a
 - name: github.com/davecgh/go-spew
   version: 782f4967f2dc4564575ca782fe2d04090b5faca8
   subpackages:
@@ -238,6 +240,8 @@ imports:
   version: 5bd2802263f21d8788851d5305584c82a5c75d7e
 - name: github.com/rubenv/sql-migrate
   version: 1007f53448d75fe14190968f5de4d95ed63ebb83
+  subpackages:
+  - sqlparse
 - name: github.com/russross/blackfriday
   version: 300106c228d52c8941d4b3de6054a6062a86dda3
 - name: github.com/shurcooL/sanitized_anchor_name
@@ -369,6 +373,8 @@ imports:
   - stats
   - status
   - tap
+- name: gopkg.in/gorp.v1
+  version: 6a667da9c028871f98598d85413e3fc4c6daa52e
 - name: gopkg.in/inf.v0
   version: 3887ee99ecf07df5b447e9b00d9c0b2adaa9f3e4
 - name: gopkg.in/square/go-jose.v2
@@ -621,7 +627,7 @@ imports:
   - pkg/util/proto/testing
   - pkg/util/proto/validation
 - name: k8s.io/kubernetes
-  version: ff6a78dd494a7f03c4f9585b419a1d42b891c7f5
+  version: 20ff8218525bfc1a3aa5d69caa53e22c1a6a62fa
   subpackages:
   - pkg/api/legacyscheme
   - pkg/api/service

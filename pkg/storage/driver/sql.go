@@ -17,11 +17,12 @@ limitations under the License.
 package driver
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/jmoiron/sqlx"
-	"github.com/rubenv/sql-migrate"
+	migrate "github.com/rubenv/sql-migrate"
 
 	// Import pq for potgres dialect
 	_ "github.com/lib/pq"
@@ -129,9 +130,10 @@ func NewSQL(dialect, connectionString string) (*SQL, error) {
 
 // Get returns the release named by key.
 func (s *SQL) Get(key string) (*rspb.Release, error) {
+	var record Release
 	// Get will return an error if the result is empty
-	var record = &Release{}
-	if err := s.db.Get(record, "SELECT body FROM releases WHERE key=?", key); err != nil {
+	err := s.db.Get(&record, "SELECT body FROM releases WHERE key=?", key)
+	if err != nil {
 		return nil, storageerrors.ErrReleaseNotFound(key)
 	}
 
@@ -217,11 +219,12 @@ func (s *SQL) Create(key string, rls *rspb.Release) error {
 		return err
 	}
 
-	if _, err := s.db.NamedExec(
-		`
-		  INSERT INTO releases (key, body, name, version, status, owner, created_at)
-			VALUES (:key, :body, :name, :version, :status, :owner, :created_at)
-		`,
+	transaction, err := s.db.Beginx()
+	if err != nil {
+		return fmt.Errorf("error beginning transaction: %v", err)
+	}
+
+	if _, err := transaction.NamedExec("INSERT INTO releases (key, body, name, version, status, owner, created_at) VALUES (:key, :body, :name, :version, :status, :owner, :created_at)",
 		&Release{
 			Key:  key,
 			Body: body,
@@ -233,13 +236,15 @@ func (s *SQL) Create(key string, rls *rspb.Release) error {
 			CreatedAt: int(time.Now().Unix()),
 		},
 	); err != nil {
+		defer transaction.Rollback()
 		var record Release
-		if err := s.db.Get(&record, "SELECT key FROM releases WHERE key=?", key); err == nil {
+		if err := transaction.Get(&record, "SELECT key FROM releases WHERE key=?", key); err == nil {
 			return storageerrors.ErrReleaseExists(key)
 		}
 
 		return err
 	}
+	defer transaction.Commit()
 
 	return nil
 }
@@ -251,11 +256,7 @@ func (s *SQL) Update(key string, rls *rspb.Release) error {
 		return err
 	}
 
-	if _, err := s.db.NamedExec(
-		`
-			UPDATE releases WHERE key=:key
-			SET body=:body, name=:name, version=:version, status=:status, owner=:owner, modified_at=:modified_at
-		`,
+	if _, err := s.db.NamedExec("UPDATE releases WHERE key=:key SET body=:body, name=:name, version=:version, status=:status, owner=:owner, modified_at=:modified_at",
 		&Release{
 			Key:  key,
 			Body: body,
