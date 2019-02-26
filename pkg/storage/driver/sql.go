@@ -168,10 +168,12 @@ func (s *SQL) List(filter func(*rspb.Release) bool) ([]*rspb.Release, error) {
 func (s *SQL) Query(labels map[string]string) ([]*rspb.Release, error) {
 	var filters []string
 	for key, val := range labels {
+		// Build a slice of where filters e.g
+		// labels = map[string]string{ "foo": "foo", "bar": "bar" }
+		// []string{ "foo=:foo", "bar=:bar" }
 		if dbField, ok := labelMap[key]; ok {
-			// TODO: escape that better
 			filters = append(filters, strings.Join([]string{
-				dbField, "='", val, "'",
+				dbField, "=:", dbField,
 			}, ""))
 		}
 	}
@@ -182,7 +184,7 @@ func (s *SQL) Query(labels map[string]string) ([]*rspb.Release, error) {
 		strings.Join(filters, " AND "),
 	}, " ")
 
-	rows, err := s.db.Query(query)
+	rows, err := s.db.NamedQuery(query, labels)
 	if err != nil {
 		return nil, err
 	}
