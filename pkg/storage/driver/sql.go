@@ -168,25 +168,28 @@ func (s *SQL) List(filter func(*rspb.Release) bool) ([]*rspb.Release, error) {
 
 // Query returns the set of releases that match the provided set of labels.
 func (s *SQL) Query(labels map[string]string) ([]*rspb.Release, error) {
-	var filters []string
+	var sqlFilterKeys []string
+	sqlFilter := map[string]interface{}{}
 	for key, val := range labels {
 		// Build a slice of where filters e.g
 		// labels = map[string]string{ "foo": "foo", "bar": "bar" }
-		// []string{ "foo=:foo", "bar=:bar" }
+		// []string{ "foo=?", "bar=?" }
 		if dbField, ok := labelMap[key]; ok {
-			filters = append(filters, strings.Join([]string{
-				dbField, "=:", dbField,
-			}, ""))
+			sqlFilterKeys = append(sqlFilterKeys, strings.Join([]string{dbField, "=:", dbField}, ""))
+			sqlFilter[dbField] = val
+		} else {
+			return nil, fmt.Errorf("unknow label %s", key)
 		}
 	}
 
+	// Build our query
 	query := strings.Join([]string{
 		"SELECT body FROM releases",
 		"WHERE",
-		strings.Join(filters, " AND "),
+		strings.Join(sqlFilterKeys, " AND "),
 	}, " ")
 
-	rows, err := s.db.NamedQuery(query, labels)
+	rows, err := s.db.NamedQuery(query, sqlFilter)
 	if err != nil {
 		return nil, err
 	}
@@ -194,7 +197,7 @@ func (s *SQL) Query(labels map[string]string) ([]*rspb.Release, error) {
 	var releases []*rspb.Release
 	for rows.Next() {
 		var record Release
-		if err = rows.Scan(&record); err != nil {
+		if err = rows.StructScan(&record); err != nil {
 			return nil, err
 		}
 

@@ -70,14 +70,14 @@ func TestSQLGet(t *testing.T) {
 }
 
 func TestSQLList(t *testing.T) {
-	sqlDriver, mock := newTestFixtureSQL(t)
-
 	body1, _ := encodeRelease(releaseStub("key-1", 1, "default", rspb.Status_DELETED))
 	body2, _ := encodeRelease(releaseStub("key-2", 1, "default", rspb.Status_DELETED))
 	body3, _ := encodeRelease(releaseStub("key-3", 1, "default", rspb.Status_DEPLOYED))
 	body4, _ := encodeRelease(releaseStub("key-4", 1, "default", rspb.Status_DEPLOYED))
 	body5, _ := encodeRelease(releaseStub("key-5", 1, "default", rspb.Status_SUPERSEDED))
 	body6, _ := encodeRelease(releaseStub("key-6", 1, "default", rspb.Status_SUPERSEDED))
+
+	sqlDriver, mock := newTestFixtureSQL(t)
 
 	for i := 0; i < 3; i++ {
 		mock.
@@ -217,8 +217,70 @@ func TestSqlUpdate(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	if err := sqlDriver.Update(key, rel); err != nil {
-		t.Fatalf("failed to create release with key %q: %v", key, err)
+		t.Fatalf("failed to update release with key %q: %v", key, err)
 	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("sql expectations weren't met: %v", err)
+	}
+}
+
+func TestSqlQuery(t *testing.T) {
+	// Reflect actual use cases in ../storage.go
+	labelSetDeployed := map[string]string{
+		"NAME":   "smug-pigeon",
+		"OWNER":  "TILLER",
+		"STATUS": "DEPLOYED",
+	}
+	labelSetAll := map[string]string{
+		"NAME":  "smug-pigeon",
+		"OWNER": "TILLER",
+	}
+
+	supersededReleaseBody, _ := encodeRelease(releaseStub("smug-pigeon", 1, "default", rspb.Status_SUPERSEDED))
+	deployedReleaseBody, _ := encodeRelease(releaseStub("smug-pigeon", 2, "default", rspb.Status_DEPLOYED))
+
+	// Let's actually start our test
+	sqlDriver, mock := newTestFixtureSQL(t)
+
+	mock.
+		ExpectQuery(regexp.QuoteMeta("SELECT body FROM releases WHERE")).
+		WithArgs("smug-pigeon", "TILLER", "DEPLOYED").
+		WillReturnRows(
+			mock.NewRows([]string{
+				"body",
+			}).AddRow(
+				deployedReleaseBody,
+			),
+		).RowsWillBeClosed()
+
+	mock.
+		ExpectQuery(regexp.QuoteMeta("SELECT body FROM releases WHERE")).
+		WithArgs("smug-pigeon", "TILLER").
+		WillReturnRows(
+			mock.NewRows([]string{
+				"body",
+			}).AddRow(
+				supersededReleaseBody,
+			).AddRow(
+				deployedReleaseBody,
+			),
+		).RowsWillBeClosed()
+
+	// TODO: fix ordering issue
+	_, err := sqlDriver.Query(labelSetDeployed)
+	if err != nil {
+		t.Fatalf("failed to query for deployed smug-pigeon release: %v", err)
+	}
+
+	// TODO: return something and check for the release consistency like in GET
+
+	_, err = sqlDriver.Query(labelSetAll)
+	if err != nil {
+		t.Fatalf("failed to query release history for smug-pigeon: %v", err)
+	}
+
+	// TODO: return something and check for the release consistency like in GET
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("sql expectations weren't met: %v", err)
