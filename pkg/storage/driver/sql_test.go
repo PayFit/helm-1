@@ -214,7 +214,7 @@ func TestSqlUpdate(t *testing.T) {
 	mock.
 		ExpectExec(regexp.QuoteMeta("UPDATE releases WHERE key=? SET body=?, name=?, version=?, status=?, owner=?, modified_at=?")).
 		WithArgs(key, body, rel.Name, int(rel.Version), rspb.Status_Code_name[int32(rel.Info.Status.Code)], "TILLER", int(time.Now().Unix())).
-		WillReturnResult(sqlmock.NewResult(1, 1))
+		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	if err := sqlDriver.Update(key, rel); err != nil {
 		t.Fatalf("failed to update release with key %q: %v", key, err)
@@ -237,14 +237,16 @@ func TestSqlQuery(t *testing.T) {
 		"OWNER": "TILLER",
 	}
 
-	supersededReleaseBody, _ := encodeRelease(releaseStub("smug-pigeon", 1, "default", rspb.Status_SUPERSEDED))
-	deployedReleaseBody, _ := encodeRelease(releaseStub("smug-pigeon", 2, "default", rspb.Status_DEPLOYED))
+	supersededRelease := releaseStub("smug-pigeon", 1, "default", rspb.Status_SUPERSEDED)
+	supersededReleaseBody, _ := encodeRelease(supersededRelease)
+	deployedRelease := releaseStub("smug-pigeon", 2, "default", rspb.Status_DEPLOYED)
+	deployedReleaseBody, _ := encodeRelease(deployedRelease)
 
 	// Let's actually start our test
 	sqlDriver, mock := newTestFixtureSQL(t)
 
 	mock.
-		ExpectQuery(regexp.QuoteMeta("SELECT body FROM releases WHERE")).
+		ExpectQuery(regexp.QuoteMeta("SELECT body FROM releases WHERE name=? AND owner=? AND status=?")).
 		WithArgs("smug-pigeon", "TILLER", "DEPLOYED").
 		WillReturnRows(
 			mock.NewRows([]string{
@@ -255,7 +257,7 @@ func TestSqlQuery(t *testing.T) {
 		).RowsWillBeClosed()
 
 	mock.
-		ExpectQuery(regexp.QuoteMeta("SELECT body FROM releases WHERE")).
+		ExpectQuery(regexp.QuoteMeta("SELECT body FROM releases WHERE name=? AND owner=?")).
 		WithArgs("smug-pigeon", "TILLER").
 		WillReturnRows(
 			mock.NewRows([]string{
@@ -267,20 +269,74 @@ func TestSqlQuery(t *testing.T) {
 			),
 		).RowsWillBeClosed()
 
-	// TODO: fix ordering issue
-	_, err := sqlDriver.Query(labelSetDeployed)
+	results, err := sqlDriver.Query(labelSetDeployed)
 	if err != nil {
 		t.Fatalf("failed to query for deployed smug-pigeon release: %v", err)
 	}
 
-	// TODO: return something and check for the release consistency like in GET
+	for _, res := range results {
+		if !reflect.DeepEqual(res, deployedRelease) {
+			t.Errorf("Expected release {%q}, got {%q}", deployedRelease, res)
+		}
+	}
 
-	_, err = sqlDriver.Query(labelSetAll)
+	results, err = sqlDriver.Query(labelSetAll)
 	if err != nil {
 		t.Fatalf("failed to query release history for smug-pigeon: %v", err)
 	}
 
-	// TODO: return something and check for the release consistency like in GET
+	if len(results) != 2 {
+		t.Errorf("expected a resultset of size 2, got %d", len(results))
+	}
+
+	for _, res := range results {
+		if !reflect.DeepEqual(res, deployedRelease) && !reflect.DeepEqual(res, supersededRelease) {
+			t.Errorf("Expected release {%q} or {%q}, got {%q}", deployedRelease, supersededRelease, res)
+		}
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("sql expectations weren't met: %v", err)
+	}
+}
+
+func TestSqlDelete(t *testing.T) {
+	vers := int32(1)
+	name := "smug-pigeon"
+	namespace := "default"
+	key := testKey(name, vers)
+	rel := releaseStub(name, vers, namespace, rspb.Status_DEPLOYED)
+
+	body, _ := encodeRelease(rel)
+
+	sqlDriver, mock := newTestFixtureSQL(t)
+
+	mock.ExpectBegin()
+	mock.
+		ExpectQuery("SELECT body FROM releases WHERE key=?").
+		WithArgs(key).
+		WillReturnRows(
+			mock.NewRows([]string{
+				"body",
+			}).AddRow(
+				body,
+			),
+		).RowsWillBeClosed()
+
+	mock.
+		ExpectExec(regexp.QuoteMeta("DELETE FROM releases WHERE key=?")).
+		WithArgs(key).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	deletedRelease, err := sqlDriver.Delete(key)
+	if err != nil {
+		t.Fatalf("failed to delete release with key %q: %v", key, err)
+	}
+
+	if !reflect.DeepEqual(rel, deletedRelease) {
+		t.Errorf("Expected release {%q}, got {%q}", rel, deletedRelease)
+	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("sql expectations weren't met: %v", err)

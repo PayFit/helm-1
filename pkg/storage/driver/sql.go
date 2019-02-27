@@ -18,6 +18,7 @@ package driver
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -181,6 +182,7 @@ func (s *SQL) Query(labels map[string]string) ([]*rspb.Release, error) {
 			return nil, fmt.Errorf("unknow label %s", key)
 		}
 	}
+	sort.Strings(sqlFilterKeys)
 
 	// Build our query
 	query := strings.Join([]string{
@@ -279,6 +281,24 @@ func (s *SQL) Update(key string, rls *rspb.Release) error {
 
 // Delete deletes a release or returns ErrReleaseNotFound.
 func (s *SQL) Delete(key string) (*rspb.Release, error) {
-	_, err := s.db.Exec("DELETE FROM releases WHERE key=?", key)
-	return nil, err
+	transaction, err := s.db.Beginx()
+	if err != nil {
+		return nil, fmt.Errorf("error beginning transaction: %v", err)
+	}
+
+	var record Release
+	err = transaction.Get(&record, "SELECT body FROM releases WHERE key=?", key)
+	if err != nil {
+		return nil, storageerrors.ErrReleaseNotFound(key)
+	}
+
+	release, err := decodeRelease(record.Body)
+	if err != nil {
+		transaction.Rollback()
+		return nil, err
+	}
+	defer transaction.Commit()
+
+	_, err = transaction.Exec("DELETE FROM releases WHERE key=?", key)
+	return release, err
 }
